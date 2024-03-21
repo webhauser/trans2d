@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<title>2D accumulated transformations</title>
+<style>
+* { margin:0; padding:0; } 		/* remove the top and left whitespace */
+html, body { overflow: hidden;} /* remove scrollbars */
+#Canvas {
+    position:fixed;
+    left:0;
+    top:0;
+    width:100%;
+    height:100%;
+	border:1px solid #c3c3c3;
+}
+</style>
+<noscript>JavaScript is Disabled. Please enable javascript and refresh the page</noscript>
+<script src="m3.js"></script>
+<script>
+"use strict";
+var canvas, ctx;
+var Xc,Yc;	// Screen center
+var P;		// Projection Matrix
+var stk = new MatrixStack();
+
+var arrow = {
+	points: [
+		[-1.0,0.0, 1], 
+		[1.0, 0.0, 1],
+		[0.6, 0.15, 1], 
+		[0.6,-0.15, 1],
+		[-1.0,0.2, 1],
+		[-1.0,-0.2,1]
+	],
+	lines: [ 0, 1, 
+			 1, 2,
+			 /* 2, 3, */
+			 3, 1,
+			 4, 5
+	]
+};
+
+var graph =
+{
+	"id": 1,
+	"name": "First box",
+	"move": [100, 100],
+	"size":	[500, 300],
+	"center": [0, 0],
+	"rotate": 10,
+	"child": [
+		{
+			"id": 2,
+			"name": "Second",
+			"move": [100, 100],
+			"size":	[100, 100],
+			"center": [0, 0],
+			"rotate": 20,
+		},
+		{
+			"id": 3,
+			"name": "Third",
+			"move": [10, 0],
+			"size":	[400, 50],
+			"center": [0, 0],
+			"rotate": 0,
+		}
+	]
+}
+
+function deg2rad(x) {
+	return x / 180.0 * Math.PI;
+}
+
+function cls() {
+	ctx.clearRect(0,0, canvas.width,canvas.height);
+}
+
+function plot(x,y, col='red') {
+	const xs = 4;
+	ctx.fillStyle = col;
+	ctx.fillRect(x-xs/2, y - xs/2, xs,xs);
+}
+
+function draw_circle(x0,y0, r, col='black') {
+	ctx.strokeStyle = col;
+	ctx.beginPath();
+	ctx.arc(x0,y0, r, 0, 2*Math.PI);
+	ctx.stroke();
+}
+
+function draw_line(x0,y0,x1,y1, col='black') {
+	ctx.strokeStyle = col;
+	ctx.beginPath();
+	ctx.moveTo(x0,y0);
+	ctx.lineTo(x1,y1);
+	ctx.stroke();
+}
+
+function draw_line_vec(p, q, colour='black') {
+	draw_line(p[0],p[1], q[0],q[1], colour);
+}
+
+function dot(p) {
+	plot(p[0], p[1]);
+}
+
+function draw_rect(x0,y0, x1,y1) {
+	draw_line(x0,y0, x0,y1);
+	draw_line(x0,y1, x1,y1);
+	draw_line(x1,y1, x1,y0);
+	draw_line(x1,y0, x0,y0);
+}
+
+function draw_rect_vec(p, q) {
+	draw_line(p[0],p[1], p[0],q[1]);
+	draw_line(p[0],q[1], q[0],q[1]);
+	draw_line(q[0],q[1], q[0],p[1]);
+	draw_line(q[0],p[1], p[0],p[1]);
+}
+
+function draw_axes() {	
+	ctx.lineWidth = 1;
+	draw_line(0,Yc, canvas.width,Yc, 'blue');
+	draw_line(Xc,0, Xc,canvas.height, 'blue');
+	plot(Xc,Yc);
+}
+
+function draw_arrow(colour='black') {
+	let M=stk.getCurrentMatrix();
+	
+	function transform(k) {
+		return m3.transform(arrow.points[k], M);
+	}
+
+	function draw_arrow_line(i,j) {
+		draw_line_vec(transform(i), transform(j), colour);
+	}
+
+	for (let i=0; i<arrow.lines.length; i+=2) {
+		draw_arrow_line(arrow.lines[i], arrow.lines[i+1]);
+	}
+}
+
+function drawing0() {
+	const X_dist = 100;
+	const AngleRad = deg2rad(30);
+
+	let q,p = [0, 0, 1];
+		
+let M = m3.identity();
+	M = m3.rotate(M, AngleRad);
+	M = m3.translate(M, X_dist,0);
+	M = m3.multiply(P,M);	// first M then P
+	// Order: projection, translate, rotate, identity
+	q = m3.transform(p, M);
+	
+	dot(q);
+	draw_line(Xc,Yc, q[0],q[1], 'green');
+	draw_circle(Xc,Yc, X_dist, 'green');	
+}
+
+/** 
+* returns with a transformation matrix that
+* first rotates around a center
+* then translates and scales
+	M = m3.identity();
+	M = m3.translate(M, tx,ty);
+	M = m3.rotate(M, deg2rad(a));
+	M = m3.scale(M, scale,scale);
+*/
+function getTransform(tx, ty, angle, scale) {
+	let T = m3.translation(tx, ty);
+	let R = m3.rotation(deg2rad(angle));
+	let S = m3.scaling(scale, scale);
+	let TR = m3.multiply(T, R);
+	return m3.multiply(TR, S);	// TRS
+}
+
+/**
+Order of transformations:
+1. Scaling
+2. Rotation
+3. Translation
+*/
+function draw_figure1(tx,ty, scale, angleStep, colour) {
+	for (let a=0; a<360; a+=angleStep) {
+	let M = getTransform(tx,ty, a, scale);
+		M = m3.multiply(stk.getCurrentMatrix(), M);
+		M = m3.multiply(P,M);
+		stk.save();
+		stk.setCurrentMatrix(M);
+		draw_arrow(colour);
+		stk.restore();
+	}
+}
+
+function drawing1() {	
+	draw_figure1( 600,0, 100, 40, 'green');
+	draw_figure1(-600,0, 100, 40, 'blue');
+	draw_figure1(-700,0,  50, 40, 'green');
+	draw_figure1( 300,0, 300, 40, 'red');
+	draw_figure1(-300,0, 300, 40, 'red');
+}
+
+/**
+Order of transformations:
+1. Scaling
+2. Translation
+3. Rotation
+*/
+function draw_figure2(tx,ty, scale, angleStep, colour) {
+	for (let a=0; a<360; a+=angleStep) {
+	let M = m3.identity();
+		M = m3.rotate(M, deg2rad(a));
+		M = m3.translate(M, tx,ty);
+		M = m3.scale(M, scale,scale);
+		M = m3.multiply(stk.getCurrentMatrix(), M);
+		M = m3.multiply(P,M);
+		stk.save();
+		stk.setCurrentMatrix(M);
+		draw_arrow(colour);
+		stk.restore();
+	}
+}
+
+function drawing2() {
+	for (let ty=50; ty<=300; ty+=50) {
+		draw_figure2( 0,ty, ty/3, 40, 'blue');
+	}
+}
+
+function draw() {
+	cls();
+	draw_axes();	
+	for (let i=0; i<360; i+=40) {
+		stk.setCurrentMatrix(getTransform(i,i, i, 40.0/(40+i)));
+		drawing0();
+		drawing1();
+		drawing2();	
+	}
+}
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+	Xc=canvas.width/2;
+	Yc=canvas.height/2;
+	P = m3.projection(canvas.width, canvas.height);
+	draw();
+}
+
+function init() {
+	canvas = document.getElementById("Canvas");
+	ctx = canvas.getContext("2d");
+	canvas.addEventListener('resize', resize, false); 
+	resize();
+}
+</script>
+</head>
+<body onload="init();">
+<canvas id="Canvas">Your browser does not support the canvas element.</canvas>
+</body>
+</html>
